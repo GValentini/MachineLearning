@@ -1,0 +1,123 @@
+---
+title: "PrMachLearning - Course Project"
+author: "Giovanni Valentini"
+date: "Tuesday, November 17, 2015"
+output:
+  html_document:
+    theme: readable
+---
+### Practical Machine Learning Class - November 2015
+### Prediction Assignment Writeup
+
+### Introduction
+This project shows the analysis I performed in order to build a predictive model.
+The data come from a research about "Qualitative Activity Recognition" of weight lifting exercises.
+The goal of the model is to predict the quality of executing the exercise, as assessed by a factor variable called **"classe"** in the training dataset. The predictors are derived from features recorded by on-body sensors (accelerometers).
+In the analysis I used the `caret` R package.
+
+### Selection of the predictors
+The following code reads the data and stores them in 2 datasets:   
+1. **training** which will be split in 2 sets in order to train and test the model   
+2. **testing** which contains the 20 test cases to predict   
+
+```{r, warning=FALSE}
+library(caret)
+training <- read.csv("./pml-training.csv")
+testing <- read.csv("./pml-testing.csv")
+```
+The number of variables is very large (there are 160 columns in the **training** dataset):
+```{r}
+dim(training)
+```
+In order to select the features for my model I followed 2 steps:   
+1. I removed the variables with **near zero variance**
+```{r}
+nz <- nearZeroVar(training)
+training <- training[, -nz]
+testing <- testing[, -nz]
+dim(training)
+```
+2. I removed the variables with a large number of **NA values**.   
+The number of NAs for each column is stored in the variable `a`.
+```{r}
+a <- rep(0, dim(training)[2])
+for (j in 1:dim(training)[2]) {
+  a[j] <- sum(is.na(training[, j]))
+}
+```
+The following plot shows that 41 columns have more than 19000 NA values, and I decided to remove the corresponding variables:
+```{r, warning=FALSE}
+qplot(a, xlab = "number of NA values")
+table(a < dim(training)[1] - 500)
+training <- training[, a < dim(training)[1] - 500]
+testing <- testing[, a < dim(training)[1] - 500]
+dim(training)
+```
+I point out that the first 6 among the remaining 59 columns are not relevant as predictors, and I excluded them:
+```{r}
+str(training[,1:6])
+```
+### Building the model and preprocessing with PCA
+In order to use a **Cross-Validation** approach I split the training dataset into 2 sets:   
+1. **trainSet** used to train the model   
+2. **testSet** used to test the model
+```{r}
+set.seed(125)
+inTrain <- createDataPartition(y = training$classe, 
+                               p = 0.75, list = FALSE)
+trainSet <- training[inTrain, 7:59]
+testSet <- training[-inTrain, 7:59]
+which(names(trainSet) == "classe")
+```
+The following matrix `V` shows that there is a high correlation between some of the selected variables.
+```{r}
+V <- abs(cor(trainSet[,-53]))
+table(V > 0.7 & V < 1.0)
+```
+This led me to use **Principal Components Analysis (PCA)** as a pre-processing method, in order to find a new set of **uncorrelated predictors** which explain about 95% of the original variance (argument thresh = 0.95 in the preProcess function).
+```{r}
+xpca <- preProcess(trainSet[,-53], method = "pca", 
+                   thresh = 0.95)
+trainPCA <- predict(xpca, trainSet[,-53])
+xpca
+```
+### Training the model - method "rpart"
+In my first attempt I use method **rpart** to train the model. I use method "cv" (cross-validation) and number = 3 (k parameter) in **trainControl** function, in order to control the computational aspects of the train function.
+```{r, cache=TRUE}
+modFit <- train(trainSet$classe ~ ., data = trainPCA, 
+                method = "rpart",
+                trControl = trainControl(method = "cv", number = 3))
+testPCA <- predict(xpca, testSet[,-53])
+confusionMatrix(testSet$classe, predict(modFit,testPCA))
+```
+The accuracy of the model is quite low: **0.3752**, and the estimate of the **out of sample error** is obtained as `1 - accuracy` and then is:
+```{r, echo=FALSE}
+1 - 0.3752
+```
+The accuracy is too low to correctly predict, and I decide to use a new model.   
+
+### Training the model - method Random Forest
+In my second attempt I use the method **Random Forest** to train the model.   
+I use method "cv" (cross-validation) and number = 3 (k parameter) in **trainControl** function, in order to control the computational aspects of the train function.
+```{r, cache=TRUE, warning=FALSE}
+modFitRF <- train(trainSet$classe ~ ., data = trainPCA,
+                  method = "rf",
+                  trControl = trainControl(method = "cv", number = 3))
+pred <- predict(modFitRF, testPCA)
+confusionMatrix(testSet$classe, pred)
+```
+The accuracy of the model is very high, over **0.97** and consequently the estimate of the ***out of sample error*** is under **0.03**.   
+The following plot shows the **right predictions** of testSet outcomes (green colour):
+```{r}
+predRight <- (pred == testSet$classe)*1 + 2
+plot(testPCA[,1], testPCA[,2], col=predRight, pch=20,
+     main = "Right Predictions of new data")
+```
+This approach seems to be very effective and I use the model based on **Random Forest** to predict the 20 test cases to submit:
+```{r, warning=FALSE}
+testingPCA <- predict(xpca, testing[,7:58])
+myAnswers <- predict(modFitRF, newdata = testingPCA)
+myAnswers
+```
+
+
